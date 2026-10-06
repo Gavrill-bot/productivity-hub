@@ -163,6 +163,46 @@
       box-shadow: 0 0 6px #34d399;
     }
 
+    .header-top-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cloud-sync-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(8px);
+      padding: 3px 8px;
+      border-radius: var(--radius-full);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      transition: all 0.3s ease;
+    }
+
+    .cloud-sync-badge .cloud-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #fbbf24;
+      box-shadow: 0 0 6px rgba(251, 191, 36, 0.8);
+      transition: all 0.3s ease;
+    }
+
+    .cloud-sync-badge.synced .cloud-dot {
+      background: #34d399;
+      box-shadow: 0 0 6px rgba(52, 211, 153, 0.8);
+    }
+
+    .cloud-sync-badge.offline .cloud-dot {
+      background: #f87171;
+      box-shadow: 0 0 6px rgba(248, 113, 113, 0.8);
+    }
+
     .header-date {
       font-size: 12px;
       opacity: 0.9;
@@ -1834,7 +1874,13 @@
           <span class="dot"></span>
           <span>Productivity Hub</span>
         </div>
-        <div class="header-date" id="currentDateDisplay">Selasa, 29 Sep</div>
+        <div class="header-top-right">
+          <div class="cloud-sync-badge" id="cloudSyncStatus" title="Status Sinkronisasi Firebase Firestore">
+            <span class="cloud-dot"></span>
+            <span id="cloudSyncText">Menghubungkan...</span>
+          </div>
+          <div class="header-date" id="currentDateDisplay">Selasa, 29 Sep</div>
+        </div>
       </div>
       <div class="header-greeting">
         <h1 id="greetingText">Halo, Semangat!</h1>
@@ -2252,7 +2298,133 @@
   </div>
 
   <!-- JavaScript Logic -->
-  <script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      setDoc,
+      updateDoc,
+      deleteDoc,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // --- FIREBASE CONFIGURATION & INITIALIZATION ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyCdRgZ2RSanmLho0ftlR2SLoigAE3bCHxU",
+      authDomain: "productivity-hub-3523c.firebaseapp.com",
+      projectId: "productivity-hub-3523c",
+      storageBucket: "productivity-hub-3523c.firebasestorage.app",
+      messagingSenderId: "354683284499",
+      appId: "1:354683284499:web:d81707161076470f4a23e6"
+    };
+
+    let db = null;
+    let isFirebaseReady = false;
+
+    function updateSyncStatus(status, text) {
+      const badge = document.getElementById('cloudSyncStatus');
+      const label = document.getElementById('cloudSyncText');
+      if (!badge || !label) return;
+      badge.classList.remove('synced', 'offline');
+      if (status === 'synced') {
+        badge.classList.add('synced');
+        label.textContent = text || 'Cloud Sync';
+      } else if (status === 'offline') {
+        badge.classList.add('offline');
+        label.textContent = text || 'Offline';
+      } else {
+        label.textContent = text || 'Menghubungkan...';
+      }
+    }
+
+    function initFirebaseSync() {
+      try {
+        const app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        isFirebaseReady = true;
+        updateSyncStatus('connecting', 'Menghubungkan...');
+
+        // 1. Sinkronisasi Real-Time Tasks
+        onSnapshot(collection(db, 'tasks'), (snapshot) => {
+          updateSyncStatus('synced', 'Cloud Sync');
+          if (!snapshot.empty) {
+            const cloudTasks = [];
+            snapshot.forEach((docSnap) => {
+              const d = docSnap.data();
+              cloudTasks.push({
+                id: Number(d.id) || Number(docSnap.id) || Date.now(),
+                title: d.title || '',
+                priority: (d.priority || 'sedang').toLowerCase(),
+                completed: Boolean(d.completed),
+                date: d.date || 'Hari ini',
+                createdAt: d.createdAt || 0
+              });
+            });
+            tasks = cloudTasks;
+            try {
+              localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(tasks));
+            } catch (e) {}
+            renderTasks();
+          } else {
+            // Jika database di Firestore masih kosong, migrasikan data lokal saat ini
+            if (tasks && tasks.length > 0) {
+              tasks.forEach((t) => {
+                setDoc(doc(db, 'tasks', String(t.id)), {
+                  ...t,
+                  createdAt: t.createdAt || Date.now()
+                }).catch(console.warn);
+              });
+            }
+          }
+        }, (err) => {
+          console.warn('Firestore tasks listener info:', err);
+          updateSyncStatus('offline', 'Lokal (Offline)');
+        });
+
+        // 2. Sinkronisasi Real-Time Jurnal
+        onSnapshot(collection(db, 'journals'), (snapshot) => {
+          updateSyncStatus('synced', 'Cloud Sync');
+          if (!snapshot.empty) {
+            const cloudJournals = [];
+            snapshot.forEach((docSnap) => {
+              const d = docSnap.data();
+              cloudJournals.push({
+                id: Number(d.id) || Number(docSnap.id) || Date.now(),
+                subject: d.subject || 'Informatika & Pemrograman Web',
+                level: d.level || 'Sangat Paham',
+                emoji: d.emoji || '⚡',
+                content: d.content || '',
+                date: d.date || 'Hari ini',
+                createdAt: d.createdAt || 0
+              });
+            });
+            journals = cloudJournals;
+            try {
+              localStorage.setItem(STORAGE_KEY_JOURNALS, JSON.stringify(journals));
+            } catch (e) {}
+            renderJournals();
+          } else {
+            if (journals && journals.length > 0) {
+              journals.forEach((j) => {
+                setDoc(doc(db, 'journals', String(j.id)), {
+                  ...j,
+                  createdAt: j.createdAt || Date.now()
+                }).catch(console.warn);
+              });
+            }
+          }
+        }, (err) => {
+          console.warn('Firestore journals listener info:', err);
+        });
+
+      } catch (err) {
+        console.warn('Firebase init error:', err);
+        updateSyncStatus('offline', 'Lokal (Offline)');
+      }
+    }
+
     // --- STATE MANAGEMENT ---
     const STORAGE_KEY_TASKS = 'prodhub_tasks_v3';
     const STORAGE_KEY_JOURNALS = 'prodhub_reflections_v2';
@@ -2515,11 +2687,13 @@
       if (event) event.stopPropagation();
       const priorityOrder = ['tinggi', 'sedang', 'rendah'];
       const labelMap = { tinggi: 'Tinggi', sedang: 'Sedang', rendah: 'Rendah' };
+      let newPriority = null;
       tasks = tasks.map(t => {
         if (t.id === id) {
           const current = (t.priority || 'sedang').toLowerCase();
           const nextIndex = (priorityOrder.indexOf(current) + 1) % priorityOrder.length;
           const nextPriority = priorityOrder[nextIndex];
+          newPriority = nextPriority;
           playTone(680, 0.08, 'sine');
           showToast(`Prioritas diubah ke ${labelMap[nextPriority]}! 🔄`);
           return { ...t, priority: nextPriority };
@@ -2527,6 +2701,11 @@
         return t;
       });
       saveTasks();
+      if (newPriority && isFirebaseReady && db) {
+        updateDoc(doc(db, 'tasks', String(id)), { priority: newPriority }).catch(err => {
+          console.warn('Gagal sinkron prioritas tugas ke Firestore:', err);
+        });
+      }
     }
 
     function renderTasks() {
@@ -2669,6 +2848,13 @@
         console.error('Gagal menyimpan tugas ke LocalStorage:', e);
       }
 
+      // Sinkronkan ke Firestore
+      if (isFirebaseReady && db) {
+        updateDoc(doc(db, 'tasks', String(id)), { completed: nextCompleted }).catch(err => {
+          console.warn('Gagal sinkron status tugas ke Firestore:', err);
+        });
+      }
+
       // Perbarui angka counter dan progres secara langsung
       updateTaskCounters();
 
@@ -2691,6 +2877,11 @@
       setTimeout(() => {
         tasks = tasks.filter(t => t.id !== id);
         saveTasks();
+        if (isFirebaseReady && db) {
+          deleteDoc(doc(db, 'tasks', String(id))).catch(err => {
+            console.warn('Gagal hapus tugas di Firestore:', err);
+          });
+        }
         playTone(330, 0.08, 'sine');
         showToast('Tugas berhasil dihapus 🗑️');
       }, 200);
@@ -2707,11 +2898,17 @@
         title: title.trim(),
         priority: validPriority,
         completed: false,
-        date: 'Hari ini'
+        date: 'Hari ini',
+        createdAt: Date.now()
       };
 
       tasks.unshift(newTask);
       saveTasks();
+      if (isFirebaseReady && db) {
+        setDoc(doc(db, 'tasks', String(newTask.id)), newTask).catch(err => {
+          console.warn('Gagal simpan tugas baru ke Firestore:', err);
+        });
+      }
       showToast(`Tugas baru (Prioritas ${labelMap[validPriority]}) ditambahkan! 🚀`);
       playTone(580, 0.1, 'sine');
     }
@@ -3143,6 +3340,11 @@
       setTimeout(() => {
         journals = journals.filter(j => j.id !== id);
         saveJournals();
+        if (isFirebaseReady && db) {
+          deleteDoc(doc(db, 'journals', String(id))).catch(err => {
+            console.warn('Gagal hapus jurnal dari Firestore:', err);
+          });
+        }
         playTone(320, 0.08, 'sine');
         showToast('Catatan refleksi berhasil dihapus 🗑️');
       }, 200);
@@ -3190,12 +3392,19 @@
           level: currentReflectionLevel,
           emoji: currentReflectionEmoji,
           content: content,
-          date: dateStr
+          date: dateStr,
+          createdAt: Date.now()
         };
 
         // Simpan ke urutan teratas (paling baru)
         journals.unshift(newReflection);
         saveJournals();
+
+        if (isFirebaseReady && db) {
+          setDoc(doc(db, 'journals', String(newReflection.id)), newReflection).catch(err => {
+            console.warn('Gagal simpan catatan refleksi ke Firestore:', err);
+          });
+        }
 
         // Reset form
         contentInput.value = '';
@@ -3218,14 +3427,27 @@
         .replace(/'/g, "&#039;");
     }
 
+    // Expose handlers to global window for inline onclick attributes
+    window.toggleTaskStatus = toggleTaskStatus;
+    window.cycleTaskPriority = cycleTaskPriority;
+    window.deleteTask = deleteTask;
+    window.deleteJournal = deleteJournal;
+
     // --- INITIALIZATION ---
-    window.addEventListener('DOMContentLoaded', () => {
+    function initApp() {
       setupHeader();
       renderTasks();
       updateTimerUI();
       renderJournals();
       updateReflectionDateInput();
-    });
+      initFirebaseSync();
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initApp);
+    } else {
+      initApp();
+    }
   </script>
 </body>
 
